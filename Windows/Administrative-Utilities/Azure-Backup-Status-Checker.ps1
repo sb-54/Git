@@ -1,0 +1,85 @@
+#Requires -Version 7.0
+#Requires -Module Az.Resources
+
+<#
+#endregion
+
+#region Main-Execution
+.SYNOPSIS
+    Azure automation script
+
+.DESCRIPTION
+    Professional PowerShell script for Azure automation
+
+.NOTES
+    Author: Wes Ellis (wes@wesellis.com)
+    Version: 1.0.0
+    LastModified: 2025-09-19
+#>
+# Azure Backup Status Checker
+# Quick backup status verification for VMs and other resources
+# Version: 1.0
+
+param(
+    [Parameter(Mandatory=$false)]
+    [string]$ResourceGroupName,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$VaultName,
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$ShowUnprotected
+)
+
+#region Functions
+
+# Module import removed - use #Requires instead
+Show-Banner -ScriptName "Azure Backup Status Checker" -Version "1.0" -Description "Verify backup protection status"
+
+try {
+    if (-not (Test-AzureConnection -RequiredModules @('Az.RecoveryServices'))) {
+        throw "Azure connection validation failed"
+    }
+
+    $vaults = if ($VaultName) {
+        Get-AzRecoveryServicesVault -Name $VaultName
+    } else {
+        Get-AzRecoveryServicesVault -ErrorAction Stop
+    }
+
+    $backupReport = @()
+    
+    foreach ($vault in $vaults) {
+        Set-AzRecoveryServicesVaultContext -Vault $vault
+        $backupItems = Get-AzRecoveryServicesBackupItem -BackupManagementType AzureVM
+        
+        $backupReport += [PSCustomObject]@{
+            VaultName = $vault.Name
+            ResourceGroup = $vault.ResourceGroupName
+            ProtectedItems = $backupItems.Count
+            LastBackupStatus = if ($backupItems) { ($backupItems | Sort-Object LastBackupTime -Descending)[0].LastBackupStatus } else { "No backups" }
+        }
+    }
+
+    if ($ShowUnprotected) {
+        $allVMs = Get-AzVM -ErrorAction Stop
+        $protectedVMs = $vaults | ForEach-Object {
+            Set-AzRecoveryServicesVaultContext -Vault $_
+            Get-AzRecoveryServicesBackupItem -BackupManagementType AzureVM
+        }
+        
+        $unprotectedVMs = $allVMs | Where-Object { $_.Name -notin $protectedVMs.Name }
+        Write-Information "Unprotected VMs: $($unprotectedVMs.Count)"
+        $unprotectedVMs | ForEach-Object { Write-Information "  • $($_.Name)" }
+    }
+
+    $backupReport | Format-Table -AutoSize
+    Write-Log " Backup status check completed" -Level SUCCESS
+
+} catch {
+    Write-Log " Backup status check failed: $($_.Exception.Message)" -Level ERROR
+    exit 1
+}
+
+
+#endregion

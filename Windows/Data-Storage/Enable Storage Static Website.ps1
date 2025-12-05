@@ -1,0 +1,80 @@
+#Requires -Version 7.0
+#Requires -Module Az.Resources
+
+<#
+#endregion
+
+#region Main-Execution
+.SYNOPSIS
+    Enable Storage Static Website
+
+.DESCRIPTION
+    Professional PowerShell script for enterprise automation.
+    Optimized for performance, reliability, and error handling.
+
+.AUTHOR
+    Wes Ellis (wes@wesellis.com)
+
+.VERSION
+    1.0
+
+.NOTES
+    Requires appropriate permissions and modules
+#>
+
+<#
+.SYNOPSIS
+    We Enhanced Enable Storage Static Website
+
+.DESCRIPTION
+    Professional PowerShell script for enterprise automation.
+    Optimized for performance, reliability, and error handling.
+
+.AUTHOR
+    Wes Ellis (wes@wesellis.com)
+
+.VERSION
+    1.0
+
+.NOTES
+    Requires appropriate permissions and modules
+
+
+[CmdletBinding()
+try {
+    # Main script execution
+]
+$ErrorActionPreference = "Stop"
+[CmdletBinding()]
+param(
+    [string] $WEResourceGroupName,
+    [string] $WEStorageAccountName,
+    [string] $WEIndexDocument,
+    [string] $WEErrorDocument404Path
+)
+
+#region Functions
+
+$WEErrorActionPreference = 'Stop'
+; 
+$storageAccount = Get-AzStorageAccount -ResourceGroupName $WEResourceGroupName -AccountName $WEStorageAccountName; 
+$ctx = $storageAccount.Context
+Enable-AzStorageStaticWebsite -Context $ctx -IndexDocument $WEIndexDocument -ErrorDocument404Path $WEErrorDocument404Path
+
+New-Item -ErrorAction Stop $WEIndexDocument -Force
+Set-Content -ErrorAction Stop $WEIndexDocument '<h1>Welcome</h1>'
+Set-AzStorageBlobContent -Context $ctx -Container '$web' -File $WEIndexDocument -Blob $WEIndexDocument -Properties @{'ContentType' = 'text/html'}
+
+New-Item -ErrorAction Stop $WEErrorDocument404Path -Force
+Set-Content -ErrorAction Stop $WEErrorDocument404Path '<h1>Error: 404 Not Found</h1>'
+Set-AzStorageBlobContent -Context $ctx -Container '$web' -File $WEErrorDocument404Path -Blob $WEErrorDocument404Path -Properties @{'ContentType' = 'text/html'}
+
+
+
+} catch {
+    Write-Error " Script execution failed: $($_.Exception.Message)"
+    throw
+}
+
+
+#endregion

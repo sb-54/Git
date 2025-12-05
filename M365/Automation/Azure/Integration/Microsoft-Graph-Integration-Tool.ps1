@@ -1,0 +1,386 @@
+#Requires -Version 7.0
+
+<#
+#endregion
+
+#region Main-Execution
+.SYNOPSIS
+    Azure automation script
+
+.DESCRIPTION
+    Professional PowerShell script for Azure automation
+
+.NOTES
+    Author: Wes Ellis (wes@wesellis.com)
+    Version: 1.0.0
+    LastModified: 2025-09-19
+#>
+# Microsoft Graph Integration Tool
+# Professional Azure automation script for Microsoft 365 connectivity
+# Version: 2.0 | Enhanced for enterprise M365 integration
+
+param(
+    [Parameter(Mandatory=$true)]
+    [ValidateSet("GetUsers", "GetGroups", "CreateUser", "GetMailboxes", "GetTeams", "GetSites", "ManagePermissions")]
+    [string]$Operation,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$TenantId,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$ClientId,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$ClientSecret,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$UserPrincipalName,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$DisplayName,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$Department,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$JobTitle,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$OutputFormat = "Table",
+    
+    [Parameter(Mandatory=$false)]
+    [string]$ExportPath,
+    
+    [Parameter(Mandatory=$false)]
+    [int]$MaxResults = 100,
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$IncludeDisabledUsers,
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$DetailedOutput
+)
+
+#region Functions
+
+# Import common functions
+# Module import removed - use #Requires instead
+
+# Professional banner
+Show-Banner -ScriptName "Microsoft Graph Integration Tool" -Version "2.0" -Description "Enterprise M365 and Azure AD automation via Graph API"
+
+try {
+    # Test Graph connection
+    Write-ProgressStep -StepNumber 1 -TotalSteps 6 -StepName "Graph Connection" -Status "Validating Microsoft Graph connectivity"
+    
+    # Check if Microsoft.Graph module is available
+    if (-not (Get-Module -ErrorAction Stop Microsoft.Graph -ListAvailable)) {
+        Write-Log "Installing Microsoft.Graph module..." -Level INFO
+        Install-Module Microsoft.Graph -Force -AllowClobber -Scope CurrentUser
+    }
+    
+    Import-Module Microsoft.Graph.Authentication
+    Import-Module Microsoft.Graph.Users
+    Import-Module Microsoft.Graph.Groups
+    Import-Module Microsoft.Graph.Sites
+    Import-Module Microsoft.Graph.Teams
+
+    # Connect to Microsoft Graph
+    if ($ClientId -and $ClientSecret -and $TenantId) {
+        Write-Log "Connecting using service principal authentication..." -Level INFO
+        $secureSecret = ConvertTo-SecureString $ClientSecret -AsPlainText -Force
+        $credential = New-Object -ErrorAction Stop System.Management.Automation.PSCredential($ClientId, $secureSecret)
+        Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $credential
+    } else {
+        Write-Log "Connecting using interactive authentication..." -Level INFO
+        Connect-MgGraph -Scopes "User.Read.All", "Group.Read.All", "Sites.Read.All", "TeamMember.Read.All"
+    }
+    
+    $context = Get-MgContext -ErrorAction Stop
+    Write-Log "[OK] Connected to Microsoft Graph - Tenant: $($context.TenantId)" -Level SUCCESS
+
+    # Execute operations based on parameter
+    Write-ProgressStep -StepNumber 2 -TotalSteps 6 -StepName "Operation Execution" -Status "Executing $Operation"
+    
+    $results = @()
+    
+    switch ($Operation) {
+        "GetUsers" {
+            Write-Log "Retrieving user information..." -Level INFO
+            
+            $filter = ""
+            if (-not $IncludeDisabledUsers) {
+                $filter = "accountEnabled eq true"
+            }
+            if ($Department) {
+                $deptFilter = "department eq '$Department'"
+                $filter = if ($filter) { "$filter and $deptFilter" } else { $deptFilter }
+            }
+            
+            $users = Invoke-AzureOperation -Operation {
+                $params = @{
+                    Top = $MaxResults
+                }
+                if ($filter) { $params.Filter = $filter }
+                if ($DetailedOutput) {
+                    $params.Property = @("id", "displayName", "userPrincipalName", "mail", "department", "jobTitle", "accountEnabled", "createdDateTime", "lastSignInDateTime")
+                }
+                
+                Get-MgUser -ErrorAction Stop @params
+            } -OperationName "Get Users"
+            
+            $results = $users | ForEach-Object {
+                [PSCustomObject]@{
+                    DisplayName = $_.DisplayName
+                    UserPrincipalName = $_.UserPrincipalName
+                    Email = $_.Mail
+                    Department = $_.Department
+                    JobTitle = $_.JobTitle
+                    Enabled = $_.AccountEnabled
+                    Created = $_.CreatedDateTime
+                    LastSignIn = $_.LastSignInDateTime
+                }
+            }
+            
+            Write-Log "[OK] Retrieved $($results.Count) users" -Level SUCCESS
+        }
+        
+        "GetGroups" {
+            Write-Log "Retrieving group information..." -Level INFO
+            
+            $groups = Invoke-AzureOperation -Operation {
+                $params = @{
+                    Top = $MaxResults
+                }
+                if ($DetailedOutput) {
+                    $params.Property = @("id", "displayName", "description", "mailEnabled", "securityEnabled", "createdDateTime", "membershipRule")
+                }
+                
+                Get-MgGroup -ErrorAction Stop @params
+            } -OperationName "Get Groups"
+            
+            $results = $groups | ForEach-Object {
+                [PSCustomObject]@{
+                    DisplayName = $_.DisplayName
+                    Description = $_.Description
+                    MailEnabled = $_.MailEnabled
+                    SecurityEnabled = $_.SecurityEnabled
+                    Created = $_.CreatedDateTime
+                    GroupType = if ($_.SecurityEnabled -and $_.MailEnabled) { "Mail-enabled Security" } 
+                               elseif ($_.SecurityEnabled) { "Security" }
+                               elseif ($_.MailEnabled) { "Distribution" }
+                               else { "Other" }
+                }
+            }
+            
+            Write-Log "[OK] Retrieved $($results.Count) groups" -Level SUCCESS
+        }
+        
+        "GetTeams" {
+            Write-Log "Retrieving Teams information..." -Level INFO
+            
+            $teams = Invoke-AzureOperation -Operation {
+                Get-MgTeam -Top $MaxResults
+            } -OperationName "Get Teams"
+            
+            $results = $teams | ForEach-Object {
+                $team = $_
+                $group = Get-MgGroup -GroupId $team.Id
+                
+                [PSCustomObject]@{
+                    DisplayName = $group.DisplayName
+                    Description = $group.Description
+                    Privacy = $team.Visibility
+                    Created = $group.CreatedDateTime
+                    MemberCount = (Get-MgTeamMember -TeamId $team.Id).Count
+                }
+            }
+            
+            Write-Log "[OK] Retrieved $($results.Count) Teams" -Level SUCCESS
+        }
+        
+        "GetSites" {
+            Write-Log "Retrieving SharePoint sites..." -Level INFO
+            
+            $sites = Invoke-AzureOperation -Operation {
+                Get-MgSite -Top $MaxResults
+            } -OperationName "Get SharePoint Sites"
+            
+            $results = $sites | ForEach-Object {
+                [PSCustomObject]@{
+                    DisplayName = $_.DisplayName
+                    WebUrl = $_.WebUrl
+                    Description = $_.Description
+                    Created = $_.CreatedDateTime
+                    LastModified = $_.LastModifiedDateTime
+                }
+            }
+            
+            Write-Log "[OK] Retrieved $($results.Count) SharePoint sites" -Level SUCCESS
+        }
+        
+        "CreateUser" {
+            if (-not $UserPrincipalName -or -not $DisplayName) {
+                throw "UserPrincipalName and DisplayName are required for user creation"
+            }
+            
+            Write-Log "Creating new user: $UserPrincipalName" -Level INFO
+            
+            $passwordProfile = @{
+                ForceChangePasswordNextSignIn = $true
+                Password = "TempPassword123!"
+            }
+            
+            $userParams = @{
+                DisplayName = $DisplayName
+                UserPrincipalName = $UserPrincipalName
+                AccountEnabled = $true
+                PasswordProfile = $passwordProfile
+                UsageLocation = "US"
+            }
+            
+            if ($Department) { $userParams.Department = $Department }
+            if ($JobTitle) { $userParams.JobTitle = $JobTitle }
+            
+            $newUser = Invoke-AzureOperation -Operation {
+                New-MgUser -ErrorAction Stop @userParams
+            } -OperationName "Create User"
+            
+            $results = @([PSCustomObject]@{
+                DisplayName = $newUser.DisplayName
+                UserPrincipalName = $newUser.UserPrincipalName
+                UserId = $newUser.Id
+                Status = "Created Successfully"
+                TempPassword = $passwordProfile.Password
+            })
+            
+            Write-Log "[OK] User created successfully: $UserPrincipalName" -Level SUCCESS
+        }
+    }
+
+    # Format and display results
+    Write-ProgressStep -StepNumber 3 -TotalSteps 6 -StepName "Data Processing" -Status "Formatting results"
+    
+    if ($results.Count -gt 0) {
+        Write-Information ""
+        Write-Information " $Operation Results ($($results.Count) items)"
+        Write-Information "════════════════════════════════════════════════════════════════════"
+        
+        switch ($OutputFormat.ToLower()) {
+            "table" {
+                $results | Format-Table -AutoSize
+            }
+            "list" {
+                $results | Format-List
+            }
+            "json" {
+                $results | ConvertTo-Json -Depth 3
+            }
+            "csv" {
+                $results | ConvertTo-Csv -NoTypeInformation
+            }
+            default {
+                $results | Format-Table -AutoSize
+            }
+        }
+    }
+
+    # Export results if requested
+    Write-ProgressStep -StepNumber 4 -TotalSteps 6 -StepName "Data Export" -Status "Exporting results"
+    
+    if ($ExportPath -and $results.Count -gt 0) {
+        $exportFile = $ExportPath
+        if (-not $exportFile.EndsWith('.csv')) {
+            $exportFile += '.csv'
+        }
+        
+        $results | Export-Csv -Path $exportFile -NoTypeInformation -Force
+        Write-Log "[OK] Results exported to: $exportFile" -Level SUCCESS
+    }
+
+    # Generate summary statistics
+    Write-ProgressStep -StepNumber 5 -TotalSteps 6 -StepName "Analytics" -Status "Generating summary statistics"
+    
+    $stats = @{
+        TotalRecords = $results.Count
+        Operation = $Operation
+        ExecutedAt = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        TenantId = $context.TenantId
+    }
+    
+    if ($Operation -eq "GetUsers" -and $results.Count -gt 0) {
+        $enabledUsers = ($results | Where-Object { $_.Enabled }).Count
+        $disabledUsers = $results.Count - $enabledUsers
+        $stats.EnabledUsers = $enabledUsers
+        $stats.DisabledUsers = $disabledUsers
+        $stats.TopDepartments = ($results | Group-Object Department | Sort-Object Count -Descending | Select-Object -First 5).Name -join ", "
+    }
+
+    # Final validation and cleanup
+    Write-ProgressStep -StepNumber 6 -TotalSteps 6 -StepName "Cleanup" -Status "Finalizing operation"
+    
+    # Success summary
+    Write-Information ""
+    Write-Information "════════════════════════════════════════════════════════════════════════════════════════════"
+    Write-Information "                              MICROSOFT GRAPH OPERATION SUCCESSFUL"  
+    Write-Information "════════════════════════════════════════════════════════════════════════════════════════════"
+    Write-Information ""
+    Write-Information " Operation Summary:"
+    Write-Information "   • Operation: $Operation"
+    Write-Information "   • Records Retrieved: $($stats.TotalRecords)"
+    Write-Information "   • Tenant: $($stats.TenantId)"
+    Write-Information "   • Executed: $($stats.ExecutedAt)"
+    
+    if ($stats.ContainsKey("EnabledUsers")) {
+        Write-Information ""
+        Write-Information "� User Statistics:"
+        Write-Information "   • Enabled Users: $($stats.EnabledUsers)"
+        Write-Information "   • Disabled Users: $($stats.DisabledUsers)"
+        if ($stats.TopDepartments) {
+            Write-Information "   • Top Departments: $($stats.TopDepartments)"
+        }
+    }
+    
+    if ($ExportPath) {
+        Write-Information ""
+        Write-Information "[FOLDER] Export Information:"
+        Write-Information "   • Export Path: $exportFile"
+        Write-Information "   • Format: CSV"
+    }
+    
+    Write-Information ""
+    Write-Information "� Next Steps:"
+    Write-Information "   • Review the results for compliance and security"
+    Write-Information "   • Set up automated reporting for regular monitoring"
+    Write-Information "   • Consider implementing governance policies"
+    Write-Information ""
+
+    Write-Log " Microsoft Graph operation '$Operation' completed successfully!" -Level SUCCESS
+
+} catch {
+    Write-Log " Microsoft Graph operation failed: $($_.Exception.Message)" -Level ERROR -Exception $_.Exception
+    
+    Write-Information ""
+    Write-Information " Troubleshooting Tips:"
+    Write-Information "   • Verify Microsoft.Graph PowerShell module is installed"
+    Write-Information "   • Check application permissions in Azure AD"
+    Write-Information "   • Ensure proper Graph API scopes are granted"
+    Write-Information "   • Validate tenant ID and credentials"
+    Write-Information ""
+    
+    exit 1
+} finally {
+    # Disconnect from Microsoft Graph
+    try {
+        Disconnect-MgGraph -ErrorAction SilentlyContinue
+        Write-Log "Graph session disconnected" -Level INFO
+    } catch {
+        Write-Warning "Graph disconnect failed: $($_.Exception.Message)"
+    }
+}
+
+Write-Progress -Activity "Microsoft Graph Integration" -Completed
+Write-Log "Script execution completed at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -Level INFO
+
+
+#endregion
