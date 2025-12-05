@@ -95,7 +95,7 @@ Function Add-ADEEnrolmentProfileAssignment() {
 }
 
 try {
-    $CSVPath = "/Users/hea2eq/Downloads/devices.csv"
+        $CSVPath = Join-Path -Path $PSScriptRoot -ChildPath 'devices.csv'
     
     if (-not (Test-Path $CSVPath)) {
         throw "CSV file not found at: $CSVPath"
