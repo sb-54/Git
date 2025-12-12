@@ -92,7 +92,7 @@ Function Add-ADEEnrolmentProfileAssignment() {
 # Main execution
 try {
     # Your CSV path
-    $CSVPath = "/Users/s/Downloads/devices.csv"
+    $CSVPath = Join-Path -Path $PSScriptRoot -ChildPath 'devices.csv'
     
     Write-Host "Starting ADE Profile Assignment Script" -ForegroundColor Magenta
     Write-Host "Fixed for October 2025 Microsoft Graph API changes" -ForegroundColor Magenta
